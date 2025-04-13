@@ -81,26 +81,6 @@ def load_xgboost_model(args):
     xgb_model.load_model(xgb_model_path)
     return xgb_model
 
-# def mha_to_numpy(mha_file):
-#     """Convert MHA file to numpy array"""
-#     with tempfile.NamedTemporaryFile(suffix='.mha', delete=False) as tmp_file:
-#         tmp_file.write(mha_file.getbuffer())
-#         tmp_file_path = tmp_file.name
-    
-#     # Read the MHA file
-#     reader = sitk.ImageFileReader()
-#     reader.SetFileName(tmp_file_path)
-#     image = reader.Execute()
-    
-#     # Convert to numpy array
-#     array_data = sitk.GetArrayFromImage(image)
-    
-#     # Clean up temp file
-#     os.unlink(tmp_file_path)
-    
-#     return array_data
-
-
 def mha_to_numpy_3d_and_2d(mha_file, target_2d_shape=(64, 64)):
     """
     Convert an MHA file to a 3D numpy volume and a 2D numpy array (central slice).
@@ -257,7 +237,7 @@ def predict_densenet121_3d(densenet121_3d_model, npy_image):
         output = densenet121_3d_model(input_tensor)
     return output
 
-def get_feature_tensor(image_index, category='normal'):
+def get_feature_tensor(npy_image):
     """
     Extracts features from 2D and 3D models for the given image index and category.
     For 2D, the corresponding .npy file from the 2D dataset is used.
@@ -279,16 +259,16 @@ def get_feature_tensor(image_index, category='normal'):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Define file paths based on category
-    if category == 'normal':
-        image_2d = f'/kaggle/input/glaucoma-2d/normal_2d/n_{image_index}.npy'
-        image_3d = f'/kaggle/input/glaucoma-3d/normal_3d/normal_3d/n_{image_index}.npy'
-    elif category == 'glaucoma':
-        image_2d = f'/kaggle/input/glaucoma-2d/poag_2d/g_{image_index}.npy'
-        image_3d = f'/kaggle/input/glaucoma-3d/poag_3d/poag_3d/g_{image_index}.npy'
-    else:
-        raise ValueError('Category undefined')
+    # if category == 'normal':
+    #     image_2d = f'/kaggle/input/glaucoma-2d/normal_2d/n_{image_index}.npy'
+    #     image_3d = f'/kaggle/input/glaucoma-3d/normal_3d/normal_3d/n_{image_index}.npy'
+    # elif category == 'glaucoma':
+    #     image_2d = f'/kaggle/input/glaucoma-2d/poag_2d/g_{image_index}.npy'
+    #     image_3d = f'/kaggle/input/glaucoma-3d/poag_3d/poag_3d/g_{image_index}.npy'
+    # else:
+    #     raise ValueError('Category undefined')
     
-    feature_2d = predict_resnet18_2d(image_2d)
+    feature_2d = predict_resnet18_2d()
     feature_resnet3d = predict_resnet18_3d(image_3d)
     feature_densenet3d = predict_densenet121_3d(image_3d)
     feature_cnn_encoder3d = predict_cnn_encoder_3d(image_3d)
@@ -377,3 +357,22 @@ def get_dmatrix_and_np_features(np_2d_image, np_3d_image, models_2d_and_3d):
 def get_xgb_prediction(dmatrix_feature, xgb_model):
     prediction = xgb_model.predict(dmatrix_feature)
     return prediction
+
+def meta_predict(feature_tensor, xgb_model):
+    """
+    Given a feature tensor (e.g. extracted using your models), convert it to a
+    numpy array and use the trained XGBoost meta-model to perform final prediction.
+    
+    Args:
+        feature_tensor (torch.Tensor): A tensor (e.g. shape (4,1)) containing the features.
+        
+    Returns:
+        tuple: (predicted_class, predicted_probability)
+    """
+    # Flatten the tensor to shape (n_features,)
+    feature_tensor = torch.load(feature_tensor, map_location=torch.device('cpu'))
+    feature_array = feature_tensor.cpu().numpy().flatten()
+    dmatrix = xgb.DMatrix(feature_array.reshape(1, -1))
+    prob = xgb_model.predict(dmatrix)[0]
+    pred_class = 1 if prob > 0.5 else 0
+    return pred_class, 1-prob
